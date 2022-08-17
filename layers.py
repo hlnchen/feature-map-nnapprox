@@ -43,15 +43,14 @@ class LinearArcsine(nn.Linear):
             W = self.weight
         return torch.asin(nn.functional.normalize(input, dim = 1) @ nn.functional.normalize(W, dim = 0))
 
-indicator = lambda x : (x > 0).float()
-
 class RandomFeatureMap(nn.Module):        
     """
     Random feature map for arcsin
     """
-    def __init__(self, in_features: int, out_features: int = None, device = 'cpu'):
+    def __init__(self, in_features: int, out_features: int = None, device = 'cpu', indicator = lambda x : (x > 0).float()):
         """
         Build a feature map for arcsin
+        indicator: a lambda function that is either the indicator function, or a sigmoid function
         """
         super().__init__()
         self.in_features = in_features
@@ -61,7 +60,8 @@ class RandomFeatureMap(nn.Module):
         """
         weights = [nn.Parameter(torch.tensor(np.random.normal(loc=0.0, scale=1.0, size=(self.in_features,self.out_features)),device=device), requires_grad=False)] # for each N, generate N random Rademacher vectors
         self.weights = nn.ParameterList(weights)
-    
+
+        self.indicator = indicator
     
     
     def forward(self, x):
@@ -70,7 +70,7 @@ class RandomFeatureMap(nn.Module):
         with these features, phix^T phiy estimates d*(2/pi)arcsin(x^T y / ||x||||y||) 
         """
 
-        return torch.stack([2*indicator(x @ weight)-1 for weight in self.weights]).squeeze(0)
+        return torch.stack([2*self.indicator(x @ weight)-1 for weight in self.weights]).squeeze(0)
 
 
 class ArcsinNN(nn.Module):
@@ -109,7 +109,7 @@ class ApproxArcsineNN(nn.Module):
     """
     Given a valid ArcsinNN model, approximate the ArcsinNN using RandomFeatureMap for each LinearArcsine layers
     """
-    def __init__(self, model: ArcsinNN = None):
+    def __init__(self, model: ArcsinNN = None, indicator = lambda x: (x>0).float()):
         super(ApproxArcsineNN, self).__init__()
         if model is None or type(model) is not ArcsinNN:
             raise ValueError("Missing input ArcsinNN model!")
@@ -120,7 +120,7 @@ class ApproxArcsineNN(nn.Module):
         
         # create random feature maps
         dims = set(model.Layers[i].in_features for i in range(self.num_hidden_layers))
-        self.RandomFeatureMaps = {d: RandomFeatureMap(d+1, device=model.Layers[0].weight.device).float() for d in dims}
+        self.RandomFeatureMaps = {d: RandomFeatureMap(d+1, device=model.Layers[0].weight.device, indicator=indicator).float() for d in dims}
 
         # copy and paste weights
         self.Linears = nn.ModuleList([nn.Linear(in_features=model.Layers[i].in_features, out_features=model.Layers[i].out_features) for i in range(self.num_hidden_layers)])
@@ -152,7 +152,7 @@ class RepresentArcsineNN(nn.Module):
     """
     Given a valid ArcsinNN model, approximate the ArcsinNN using RandomFeatureMap for each LinearArcsine layers, and represent using composition of feature maps.
     """
-    def __init__(self, model: ArcsinNN = None):
+    def __init__(self, model: ArcsinNN = None, indicator = lambda x: (x > 0).float()):
         super(RepresentArcsineNN, self).__init__()
         if model is None or type(model) is not ArcsinNN:
             raise ValueError("Missing input ArcsinNN model!")
@@ -163,7 +163,7 @@ class RepresentArcsineNN(nn.Module):
         
         # create random feature maps
         self.input_dim = model.Layers[0].in_features
-        self.RandomFeatureMaps = {i: RandomFeatureMap(self.input_dim + i + 1, device = model.Layers[0].weight.device).float() for i in range(self.num_hidden_layers)}
+        self.RandomFeatureMaps = {i: RandomFeatureMap(self.input_dim + i + 1, device = model.Layers[0].weight.device, indicator=indicator).float() for i in range(self.num_hidden_layers)}
 
         # copy and paste weights
         self.Linears = nn.ModuleList([nn.Linear(in_features=model.Layers[i].in_features, out_features=model.Layers[i].out_features) for i in range(self.num_hidden_layers)])
