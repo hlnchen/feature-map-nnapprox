@@ -52,7 +52,7 @@ class RandomFeatureMap(nn.Module):
         """
         super().__init__()
         self.in_features = in_features
-        self.out_features = in_features if out_features is None else out_features
+        self.out_features = out_features or in_features
         """
         weights is d by d Gaussian matrix 
         """
@@ -112,7 +112,7 @@ class ApproxArcsineNN(nn.Module):
     """
     Given a valid ArcsinNN model, approximate the ArcsinNN using RandomFeatureMap for each LinearArcsine layers
     """
-    def __init__(self, model: ArcsinNN = None, indicator = lambda x: (x>0).float(), seed: int = None):
+    def __init__(self, model: ArcsinNN = None, indicator = lambda x: (x>0).float(), seed: int = None, project_dim: int = None):
         super(ApproxArcsineNN, self).__init__()
         if model is None or type(model) is not ArcsinNN:
             raise ValueError("Missing input ArcsinNN model!")
@@ -127,7 +127,7 @@ class ApproxArcsineNN(nn.Module):
 
         if self.has_bias:
             # create random feature maps
-            self.RandomFeatureMaps = {d: RandomFeatureMap(d+1, device=model.Layers[0].weight.device, indicator=indicator, seed=seed).float() for d in dims}
+            self.RandomFeatureMaps = {d: RandomFeatureMap(d+1, out_features=project_dim, device=model.Layers[0].weight.device, indicator=indicator, seed=seed).float() for d in dims}
             
             # copy and paste weights
             self.Linears = nn.ModuleList([nn.Linear(in_features=model.Layers[i].in_features, out_features=model.Layers[i].out_features) for i in range(self.num_hidden_layers)])
@@ -135,7 +135,7 @@ class ApproxArcsineNN(nn.Module):
                 self.Linears[i].weight = nn.Parameter(model.Layers[i].weight.clone().detach())
                 self.Linears[i].bias = nn.Parameter(model.Layers[i].bias.clone().detach())
         else:
-            self.RandomFeatureMaps = {d: RandomFeatureMap(d, device=model.Layers[0].weight.device, indicator=indicator, seed=seed).float() for d in dims}
+            self.RandomFeatureMaps = {d: RandomFeatureMap(d, out_features=project_dim, device=model.Layers[0].weight.device, indicator=indicator, seed=seed).float() for d in dims}
 
             # copy and paste weights
             self.Linears = nn.ModuleList([nn.Linear(in_features=model.Layers[i].in_features, out_features=model.Layers[i].out_features,bias=False) for i in range(self.num_hidden_layers)])
@@ -173,7 +173,7 @@ class RepresentArcsineNN(nn.Module):
     """
     Given a valid ArcsinNN model, approximate the ArcsinNN using RandomFeatureMap for each LinearArcsine layers, and represent using composition of feature maps.
     """
-    def __init__(self, model: ArcsinNN = None, indicator = lambda x: (x > 0).float(), seed:int = None, ignore_first_layer:bool = False):
+    def __init__(self, model: ArcsinNN = None, indicator = lambda x: (x > 0).float(), seed:int = None, ignore_first_layer:bool = False, project_dim: int = None):
         super(RepresentArcsineNN, self).__init__()
         if model is None or type(model) is not ArcsinNN:
             raise ValueError("Missing input ArcsinNN model!")
@@ -183,14 +183,13 @@ class RepresentArcsineNN(nn.Module):
         self.ignore_first_layer = ignore_first_layer
 
         self.Flatten = nn.Flatten() # flatten the input
-
-        dims = set(model.Layers[i].in_features for i in range(self.num_hidden_layers))
         
         if self.has_bias:
             # create random feature maps
             if ignore_first_layer:
                 self.input_dim = model.Layers[1].in_features
-                self.RandomFeatureMaps = {i: RandomFeatureMap(self.input_dim + i, device = model.Layers[0].weight.device, indicator=indicator, seed=seed).float() for i in range(1, self.num_hidden_layers)}
+                self.project_dim = project_dim or self.input_dim
+                self.RandomFeatureMaps = {d + 1: RandomFeatureMap(d + 1, out_features=self.project_dim, device = model.Layers[0].weight.device, indicator=indicator, seed=seed).float() for d in [self.input_dim, self.project_dim]}
                 self.Linears = nn.ModuleList([LinearArcsine(in_features=model.Layers[0].in_features, out_features=model.Layers[0].out_features)] 
                                 + [nn.Linear(in_features=model.Layers[i].in_features, out_features=model.Layers[i].out_features) for i in range(1,self.num_hidden_layers)])
                 for i in range(self.num_hidden_layers):
@@ -198,7 +197,8 @@ class RepresentArcsineNN(nn.Module):
                     self.Linears[i].bias = nn.Parameter(model.Layers[i].bias.clone().detach())
             else:
                 self.input_dim = model.Layers[0].in_features
-                self.RandomFeatureMaps = {i: RandomFeatureMap(self.input_dim + i + 1, device = model.Layers[0].weight.device, indicator=indicator, seed=seed).float() for i in range(self.num_hidden_layers)}
+                self.project_dim = project_dim or self.input_dim
+                self.RandomFeatureMaps = {d + 1: RandomFeatureMap(d + 1, out_features=self.project_dim, device = model.Layers[0].weight.device, indicator=indicator, seed=seed).float() for d in [self.input_dim, self.project_dim]}
 
                 # copy and paste weights
                 self.Linears = nn.ModuleList([nn.Linear(in_features=model.Layers[i].in_features, out_features=model.Layers[i].out_features) for i in range(self.num_hidden_layers)])
@@ -210,17 +210,19 @@ class RepresentArcsineNN(nn.Module):
         else:
             if ignore_first_layer:
                 self.input_dim = model.Layers[1].in_features
+                self.project_dim = project_dim or self.input_dim
                 self.Linears = nn.ModuleList([LinearArcsine(in_features=model.Layers[0].in_features, out_features=model.Layers[0].out_features, bias=False)] + 
                                 [nn.Linear(in_features=model.Layers[i].in_features, out_features=model.Layers[i].out_features,bias=False) for i in range(1, self.num_hidden_layers)])
-                self.RandomFeatureMaps = RandomFeatureMap(self.input_dim, device=model.Layers[0].weight.device, indicator=indicator, seed=seed).float()
+                self.RandomFeatureMaps = {d: RandomFeatureMap(d, out_features=self.project_dim, device=model.Layers[0].weight.device, indicator=indicator, seed=seed).float() for d in [self.input_dim, self.project_dim]}
 
             else:
                 self.input_dim = model.Layers[0].in_features
+                self.project_dim = project_dim or self.input_dim
                  # copy and paste weights
                 self.Linears = nn.ModuleList([nn.Linear(in_features=model.Layers[i].in_features, out_features=model.Layers[i].out_features,bias=False) for i in range(self.num_hidden_layers)])
                 for i in range(self.num_hidden_layers):
                     self.Linears[i].weight = nn.Parameter(model.Layers[i].weight.clone().detach())
-                self.RandomFeatureMaps = RandomFeatureMap(self.input_dim, device=model.Layers[0].weight.device, indicator=indicator, seed=seed).float()
+                self.RandomFeatureMaps = {d: RandomFeatureMap(d, out_features=self.project_dim, device=model.Layers[0].weight.device, indicator=indicator, seed=seed).float() for d in [self.input_dim, self.project_dim]}
         
         self.Output = nn.Linear(in_features=model.Layers[-1].in_features, out_features=model.Layers[-1].out_features)
         self.Output.weight = nn.Parameter(model.Layers[-1].weight.clone().detach())
@@ -237,45 +239,48 @@ class RepresentArcsineNN(nn.Module):
                 for i in range(1,self.num_hidden_layers):
                     # compute phi(phi(...phi(x))) 
                     x = torch.concat([x, torch.ones((n, 1), device=x.device)], dim = 1)   
-                    x = self.RandomFeatureMaps[i](x)
+                    x = self.RandomFeatureMaps[x.shape[1]](x)
 
                     # compute phi(phi(...phi(W)))
-                    W = torch.matmul(self.Linears[i].weight, W.T) # [D_out, D_in]
+                    W = torch.matmul(self.Linears[i].weight, W) # [D_out, D_in]
                     W = torch.concat([W, self.Linears[i].bias.T], dim = 1) # [D_out, D_in + 1]
-                    W = (torch.pi/2/W.shape[1]) * self.RandomFeatureMaps[i](W).T
+                    W = self.RandomFeatureMaps[W.shape[1]](W)
+                    W = (torch.pi/2/W.shape[1]) * W
             else:
                 W = torch.eye(self.Linears[0].weight.shape[1], device=self.Linears[0].weight.device)
-        
                 for i in range(self.num_hidden_layers):
                     # compute phi(phi(...phi(x))) 
                     x = torch.concat([x, torch.ones((n, 1), device=x.device)], dim = 1)   
-                    x = self.RandomFeatureMaps[i](x)
+                    x = self.RandomFeatureMaps[x.shape[1]](x)
 
                     # compute phi(phi(...phi(W)))
-                    W = torch.matmul(self.Linears[i].weight, W.T) # [D_out, D_in]
+                    W = torch.matmul(self.Linears[i].weight, W) # [D_out, D_in]
                     W = torch.concat([W, self.Linears[i].bias.T], dim = 1) # [D_out, D_in + 1]
-                    W = (torch.pi/2/W.shape[1]) * self.RandomFeatureMaps[i](W).T
+                    W = self.RandomFeatureMaps[W.shape[1]](W)
+                    W = (torch.pi/2/W.shape[1]) * W
         else:
             if self.ignore_first_layer:
                 x = self.Linears[0](x)
                 W = torch.eye(self.Linears[1].weight.shape[1], device=self.Linears[1].weight.device)
                 for i in range(1, self.num_hidden_layers):
                     # compute phi(phi(...phi(x))) 
-                    x = self.RandomFeatureMaps(x)
+                    x = self.RandomFeatureMaps[x.shape[1]](x)
 
                     # compute phi(phi(...phi(W)))
-                    W = torch.matmul(self.Linears[i].weight, W.T)
-                    W = (torch.pi/2/W.shape[1]) * self.RandomFeatureMaps(W).T
+                    W = torch.matmul(self.Linears[i].weight, W)
+                    W = self.RandomFeatureMaps[W.shape[1]](W)
+                    W = (torch.pi/2/W.shape[1]) * W
             else:
                 W = torch.eye(self.Linears[0].weight.shape[1], device=self.Linears[0].weight.device)
                 for i in range(self.num_hidden_layers):
                     # compute phi(phi(...phi(x))) 
-                    x = self.RandomFeatureMaps(x)
+                    x = self.RandomFeatureMaps[x.shape[1]](x)
 
                     # compute phi(phi(...phi(W)))
-                    W = torch.matmul(self.Linears[i].weight, W.T)
-                    W = (torch.pi/2/W.shape[1]) * self.RandomFeatureMaps(W).T
-        x = torch.matmul(x, W)
-
+                    W = torch.matmul(self.Linears[i].weight, W)
+                    W = self.RandomFeatureMaps[W.shape[1]](W)
+                    W = (torch.pi/2/W.shape[1]) * W
+        x = torch.matmul(x, W.T)
+        # Monitor the property of this W*self.Output.weight.T
         logits = self.Output(x)
         return logits
